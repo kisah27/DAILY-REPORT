@@ -134,9 +134,34 @@ td.nowrap{white-space:nowrap}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 footer{text-align:center;color:var(--mut);font-size:12px;padding:10px 0 24px;letter-spacing:1px}
 @media(max-width:600px){body{padding:10px}.card{padding:16px 13px}header{padding:20px 12px 14px}}
+
+/* ===== Gerbang izin masuk ===== */
+#gerbang{position:fixed;inset:0;z-index:9999;background:linear-gradient(160deg,#0f172a,#1e3a5f);display:flex;align-items:center;justify-content:center;padding:16px;color:#0f172a}
+#gerbangKartu{background:#fff;max-width:400px;width:100%;border-radius:16px;padding:26px 22px;box-shadow:0 20px 60px rgba(0,0,0,.45);text-align:center}
+#gerbangKartu h1{font-size:22px;margin:6px 0 0;color:var(--navy)}
+.g-sub{font-size:11px;letter-spacing:2px;color:var(--mut);font-weight:800;margin-bottom:14px}
+#gerbangLogo{font-size:36px}
+.g-pesan{background:#f1f5f9;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#334155;margin-bottom:12px;text-align:left}
+.g-status{font-size:13.5px;font-weight:800;margin:12px 0 4px}
+.g-status.tunggu{color:#b45309}
+.g-status.hijau{color:#15803d}
+.g-status.merah{color:#b91c1c}
+#gerbang input{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;font-family:inherit;margin-bottom:10px;box-sizing:border-box}
+.g-link{display:inline-block;margin-top:10px;font-size:12px;color:var(--mut);text-decoration:underline;background:none;border:none;font-family:inherit;cursor:pointer}
+#izinJumlah{display:none;background:#dc2626;color:#fff;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:800;margin-left:4px}
 </style>
 </head>
 <body>
+
+<!-- ============ GERBANG IZIN MASUK (ADMIN) ============ -->
+<div id="gerbang">
+  <div id="gerbangKartu">
+    <div id="gerbangLogo">&#128666;</div>
+    <h1>DAILY-REPORT</h1>
+    <div class="g-sub">SINAR MAJU JAYA</div>
+    <div id="gerbangIsi"><div class="g-pesan">Memeriksa izin perangkat ini...</div></div>
+  </div>
+</div>
 <div class="container">
 
   <header>
@@ -184,6 +209,7 @@ service cloud.firestore {
     <button class="tab-btn" data-tab="polisi">DAFTAR NO POLISI</button>
     <button class="tab-btn" data-tab="tujuan">DAFTAR TUJUAN</button>
     <button class="tab-btn" data-tab="status">DAFTAR STATUS</button>
+    <button class="tab-btn" data-tab="izin" id="tabIzin" style="display:none">IZIN MASUK<span id="izinJumlah"></span></button>
   </nav>
 
   <main>
@@ -369,6 +395,21 @@ service cloud.firestore {
         </div>
       </div>
     </section>
+
+    <!-- ============ IZIN MASUK (ADMIN) ============ -->
+    <section class="panel" id="panel-izin">
+      <div class="card">
+        <h2>IZIN MASUK <span class="cnt" id="countIzin">0</span></h2>
+        <details class="cara"><summary>Cara pakai IZIN MASUK: setiap HP yang membuka aplikasi minta izin dulu. Ketuk IZINKAN supaya bisa masuk permanen, KELUARKAN untuk mencabut akses. <span class="hint">(ketuk untuk buka/tutup penjelasan lengkap)</span></summary>
+        <p class="desc">Daftar perangkat yang pernah mencoba membuka aplikasi. MENUNGGU = belum diizinkan (aplikasi terkunci di HP itu). IZINKAN = boleh masuk permanen. KELUARKAN = akses dicabut, aplikasi langsung terkunci lagi di HP orang itu. Tab ini hanya tampil di perangkat admin.</p></details>
+        <div class="tblwrap">
+          <table>
+            <thead><tr><th>NAMA</th><th>STATUS</th><th>TERAKHIR BUKA</th><th>AKSI</th></tr></thead>
+            <tbody id="tbodyIzin"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer>DAILY-REPORT - SINAR MAJU JAYA - THE UNI VENUS SERANG BANTEN</footer>
@@ -425,7 +466,7 @@ const STATUS_DEFAULT = ["KIRIM", "STANDBY", "PENDING", "INAP", "STORING PERBAIKA
 const STATUS_IDS = { "KIRIM":"st-kirim", "STANDBY":"st-standby", "PENDING":"st-pending", "INAP":"st-inap", "STORING PERBAIKAN":"st-storing-perbaikan" };
 const COLS = ["polisi", "tujuan", "status", "laporan", "antrian"];
 
-const state = { polisi:[], tujuan:[], status:[], laporan:[], antrian:[] };
+const state = { polisi:[], tujuan:[], status:[], laporan:[], antrian:[], akses:[] }; // akses = daftar perangkat yang minta/dapat izin masuk
 let db = null, online = false;
 let editLaporanId = null, editMaster = null, pendingSelect = null, suppressAuto = false;
 let showAll = false, quickType = null;
@@ -475,7 +516,7 @@ async function init() {
     const snap = await Promise.race([db.collection('status').limit(1).get(), timeout]);
     online = true; setSync(true);
     if (snap.empty) await seedStatusOnline();
-    subscribeAll();
+    buatIdAlat(); subscribeAkses(); // gerbang izin masuk: data utama baru dimuat setelah izin diterima
   } catch (e) {
     goOffline(errText(e) + ' ');
   }
@@ -505,7 +546,7 @@ function pastikanStatusPending() { // pastikan opsi "PENDING" ada di daftar stat
   if (state.status.some(s => String(s.nama || '').trim().toUpperCase() === 'PENDING')) return; // hanya opsi PENDING persis yang dihitung; "KIRIMAN PENDING (...)" tidak menggantikan opsi PENDING
   addRec('status', { nama: 'PENDING', createdAt: Date.now() }).catch(() => { statusPendingDicek = false; });
 }
-function subscribeAll() {
+function subscribeAll() { // data utama: dilanggankan HANYA setelah izin masuk diterima (atau gerbang gagal dipantau)
   COLS.forEach(col => {
     const unsub = db.collection(col).onSnapshot(snap => {
       state[col] = snap.docs.map(d => Object.assign({}, d.data(), { id: d.id })); // id dokumen selalu menang atas field id sisa restore
@@ -513,14 +554,158 @@ function subscribeAll() {
       if (col === 'status') pastikanStatusPending(); // opsi PENDING selalu tersedia di dropdown status form laporan
       renderAll();
     }, err => goOffline(errText(err) + ' '));
+    unsubData.push(unsub);
   });
+  langgananDataAktif = true;
 }
+function hentikanLanggananData() { // akses dicabut admin: berhenti menerima data & kosongkan tampilan
+  unsubData.forEach(u => { try { u(); } catch (e) {} });
+  unsubData = []; langgananDataAktif = false;
+  COLS.forEach(c => { state[c] = []; terkirim[c] = false; });
+}
+
+/* ================= IZIN MASUK (GERBANG ADMIN) ================= */
+let idAlat = '';
+let unsubData = [];
+let langgananDataAktif = false;
+let izinPertama = true;
+let izinDiketahui = {};
+let tabAktif = 'input';
+let kunjunganTercatat = false;
+const HASH_ADMIN = '3f098761-a13efed8'; // kata sandi admin bawaan: smj2026 (minta bantuan asisten bila ingin diganti)
+function hashSandi(s) { // hash ber-garam: kata sandi tidak tersimpan polos di file
+  let h = 5381;
+  const S = 'smj::gerbang::' + String(s || '');
+  for (let i = 0; i < S.length; i++) h = (((h << 5) + h) + S.charCodeAt(i)) >>> 0;
+  return h.toString(16) + '-' + ((h ^ 0x9e3779b9) >>> 0).toString(16);
+}
+function buatIdAlat() { // satu perangkat = satu izin
+  try {
+    idAlat = localStorage.getItem('idAlatAplikasi');
+    if (!idAlat) { idAlat = 'alat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10); localStorage.setItem('idAlatAplikasi', idAlat); }
+  } catch (e) { idAlat = 'alat-' + Date.now().toString(36) + '-x'; }
+}
+const statusAksesSaya = () => (state.akses || []).find(a => a.id === idAlat) || null;
+const sayaAdmin = () => { const a = statusAksesSaya(); return !!(a && a.admin === true && a.status === 'DITERIMA'); };
+async function simpanAksesAlat(fields) { // catat / ubah catatan perangkat ini di daftar izin
+  if (!online || !db) return;
+  try { await db.collection('akses').doc(idAlat).set(Object.assign({}, fields), { merge: true }); } catch (e) {}
+}
+async function mintaIzin() { // tombol KIRIM PERMINTAAN IZIN di gerbang
+  const inp = document.getElementById('gerbangNama');
+  const n = String((inp && inp.value) || '').trim().toUpperCase();
+  if (!n) { alert('Tulis nama Anda dulu, lalu kirim permintaan.'); return; }
+  kunjunganTercatat = true;
+  const a = statusAksesSaya();
+  await simpanAksesAlat({ nama: n, status: (a && a.status) || 'MENUNGGU', createdAt: (a && a.createdAt) || Date.now(), terakhirAt: Date.now() });
+  renderGerbang();
+}
+async function masukAdmin() { // tombol MASUK (kata sandi admin) di gerbang
+  const inp = document.getElementById('gerbangSandi');
+  if (!inp) return;
+  if (hashSandi(inp.value) !== HASH_ADMIN) { alert('Kata sandi admin salah.'); return; }
+  const a = statusAksesSaya();
+  const nama = a && a.nama && a.nama.indexOf('BELUM ISI') < 0 ? a.nama : 'ADMIN';
+  kunjunganTercatat = true;
+  await simpanAksesAlat({ nama: nama, status: 'DITERIMA', admin: true, izinAt: Date.now(), createdAt: (a && a.createdAt) || Date.now(), terakhirAt: Date.now() });
+  inp.value = '';
+}
+function prosesIzinSaya() { // keputusan tiap snapshot: buka aplikasi / tetap terkunci / kunci lagi bila akses dicabut
+  const a = statusAksesSaya();
+  const tb = $('tabIzin');
+  if (a && a.status === 'DITERIMA') {
+    if (!langgananDataAktif && online && db) subscribeAll();
+    sembunyikanGerbang();
+    if (!kunjunganTercatat) { kunjunganTercatat = true; simpanAksesAlat({ terakhirAt: Date.now(), createdAt: a.createdAt || Date.now() }); }
+    if (sayaAdmin()) { tb.style.display = ''; renderIzinPanel(); } // tab IZIN MASUK hanya di perangkat admin
+    else tb.style.display = 'none';
+  } else {
+    if (tb) tb.style.display = 'none';
+    if (a && (a.status === 'DITOLAK' || a.status === 'DIHENTIKAN')) {
+      if (langgananDataAktif) hentikanLanggananData();
+      if (tabAktif === 'izin') setTab('input');
+      tampilkanGerbang();
+    } else {
+      tampilkanGerbang();
+      if (!kunjunganTercatat && online && db) { // setiap HP yang membuka link otomatis tercatat: admin langsung tahu ada yang mencoba masuk
+        kunjunganTercatat = true;
+        simpanAksesAlat({ nama: (a && a.nama) || '(BELUM ISI NAMA)', status: (a && a.status) || 'MENUNGGU', createdAt: (a && a.createdAt) || Date.now(), terakhirAt: Date.now() });
+      }
+    }
+  }
+}
+function sembunyikanGerbang() { const g = document.getElementById('gerbang'); if (g) g.style.display = 'none'; }
+function tampilkanGerbang() { const g = document.getElementById('gerbang'); if (g) g.style.display = 'flex'; renderGerbang(); }
+function bentukSandiAdmin(tampil) { const k = document.getElementById('kotakSandi'); if (k) k.style.display = tampil ? 'block' : 'none'; }
+const kotakSandiHtml = () => '<button type="button" class="g-link" onclick="bentukSandiAdmin(true)">Masuk sebagai ADMIN</button><div id="kotakSandi" style="display:none;margin-top:10px"><input type="password" id="gerbangSandi" placeholder="Kata sandi admin" onkeydown="if(event.key===\'Enter\')masukAdmin()" style="margin-bottom:8px"><button type="button" class="btn btn-ghost big" onclick="masukAdmin()">MASUK</button></div>';
+function renderGerbang() { // isi kartu gerbang sesuai keadaan izin perangkat ini
+  const box = document.getElementById('gerbangIsi'); if (!box) return;
+  const a = statusAksesSaya();
+  let h = '';
+  if (!a) {
+    h = '<div class="g-pesan">Memeriksa izin perangkat ini...</div>';
+  } else if (a.status === 'DITERIMA') {
+    h = '<div class="g-status hijau">IZIN DITERIMA - membuka aplikasi...</div>';
+  } else if (a.status === 'MENUNGGU') {
+    h = '<div class="g-pesan">Aplikasi ini hanya bisa dibuka setelah <b>ADMIN mengizinkan</b>. Tulis nama Anda lalu kirim permintaan - layar ini otomatis terbuka begitu admin menyetujui.</div>' +
+      '<input type="text" id="gerbangNama" placeholder="Tulis nama Anda, contoh: BUDI - PENGURUS" maxlength="40" value="' + esc(a.nama && a.nama.indexOf('BELUM ISI') < 0 ? a.nama : '') + '">' +
+      '<button type="button" class="btn btn-navy big" onclick="mintaIzin()">KIRIM PERMINTAAN IZIN</button>' +
+      '<div class="g-status tunggu">MENUNGGU IZIN ADMIN...</div>' + kotakSandiHtml();
+  } else if (a.status === 'DIHENTIKAN') {
+    h = '<div class="g-status merah">AKSES ANDA DIHENTIKAN OLEH ADMIN</div><div class="g-pesan">Hubungi admin lewat WhatsApp untuk meminta akses kembali.</div>' + kotakSandiHtml();
+  } else {
+    h = '<div class="g-status merah">PERMINTAAN IZIN ANDA DITOLAK ADMIN</div><div class="g-pesan">Hubungi admin lewat WhatsApp bila Anda memang seharusnya memakai aplikasi ini.</div>' + kotakSandiHtml();
+  }
+  box.innerHTML = h;
+}
+function subscribeAkses() { // pantau daftar izin: siapa mencoba masuk, siapa sudah diizinkan/dikeluarkan
+  db.collection('akses').onSnapshot(snap => {
+    state.akses = snap.docs.map(d => Object.assign({}, d.data(), { id: d.id }));
+    terkirim.akses = true;
+    prosesIzinSaya();
+    if (izinPertama) { izinPertama = false; (state.akses || []).forEach(a => { izinDiketahui[a.id] = a.status; }); }
+    else {
+      (state.akses || []).forEach(a => {
+        const lama = izinDiketahui[a.id];
+        izinDiketahui[a.id] = a.status;
+        if (sayaAdmin() && a.status === 'MENUNGGU' && lama !== 'MENUNGGU') showToast('PERMINTAAN IZIN BARU: ' + (a.nama || '(belum isi nama)'));
+      });
+    }
+    if (sayaAdmin()) renderIzinPanel();
+    renderGerbang();
+  }, err => bukaTanpaGerbang()); // pantauan izin gagal (mis. aturan Firebase) -> aplikasi tetap terbuka agar tidak mengunci semua orang
+}
+function bukaTanpaGerbang() { if (!langgananDataAktif && online && db) subscribeAll(); sembunyikanGerbang(); }
+function renderIzinPanel() { // daftar perangkat untuk admin: IZINKAN / TOLAK / KELUARKAN
+  const tb = document.getElementById('tbodyIzin'); if (!tb) return;
+  const urut = (state.akses || []).slice().sort((x, y) => {
+    const w = s => s === 'MENUNGGU' ? 0 : s === 'DITERIMA' ? 1 : 2;
+    return w(x.status) - w(y.status) || (y.terakhirAt || y.createdAt || 0) - (x.terakhirAt || x.createdAt || 0);
+  });
+  const badge = s => s === 'MENUNGGU' ? '<span class="badge b-amber">MENUNGGU</span>' : s === 'DITERIMA' ? '<span class="badge b-green">DITERIMA</span>' : '<span class="badge b-red">' + (s === 'DIHENTIKAN' ? 'DIHENTIKAN' : 'DITOLAK') + '</span>';
+  const aksi = a => {
+    const id = String(a.id || '').replace(/\\/g, '');
+    if (a.status === 'MENUNGGU') return '<button class="btn mini btn-green" onclick="izinkanAkses(\'' + id + '\')">IZINKAN</button> <button class="btn mini btn-red" onclick="tolakAkses(\'' + id + '\')">TOLAK</button>';
+    if (a.status === 'DITERIMA') return a.admin ? '<span style="font-size:11px;color:var(--mut)">perangkat admin</span>' : '<button class="btn mini btn-red" onclick="keluarkanAkses(\'' + id + '\')">KELUARKAN</button>';
+    return '<button class="btn mini btn-ghost" onclick="hapusAkses(\'' + id + '\')">HAPUS</button>';
+  };
+  tb.innerHTML = urut.length ? urut.map(a => '<tr><td><b>' + esc(a.nama || '(BELUM ISI NAMA)') + '</b>' + (a.id === idAlat ? ' <span style="font-size:10px;color:var(--mut)">(perangkat ini)</span>' : '') + '</td><td>' + badge(a.status) + '</td><td style="font-size:11px;color:var(--mut)">' + fmtWaktu(a.terakhirAt || a.createdAt || 0) + '</td><td>' + aksi(a) + '</td></tr>').join('') : '<tr><td colspan="4" style="text-align:center;color:var(--mut)">Belum ada perangkat yang mencoba masuk.</td></tr>';
+  document.getElementById('countIzin').textContent = urut.length;
+  const nTunggu = urut.filter(a => a.status === 'MENUNGGU').length;
+  const bj = document.getElementById('izinJumlah');
+  if (bj) { bj.textContent = String(nTunggu); bj.style.display = nTunggu ? 'inline-block' : 'none'; }
+}
+async function izinkanAkses(id) { await updateRec('akses', id, { status: 'DITERIMA', izinAt: Date.now() }); showToast('Izin diberikan - aplikasi langsung terbuka di perangkat itu'); }
+async function tolakAkses(id) { if (!confirm('Tolak permintaan perangkat ini?')) return; await updateRec('akses', id, { status: 'DITOLAK' }); showToast('Permintaan ditolak'); }
+async function keluarkanAkses(id) { if (!confirm('Keluarkan perangkat ini? Aksesnya langsung terkunci di HP orang itu.')) return; await updateRec('akses', id, { status: 'DIHENTIKAN' }); showToast('Perangkat dikeluarkan dari aplikasi'); }
+async function hapusAkses(id) { if (!confirm('Hapus catatan ini dari daftar?')) return; await deleteRec('akses', id); }
 function goOffline(reason) {
   if (online) COLS.forEach(c => lsSave(c, state[c])); // simpan data yang sudah termuat
   online = false; db = null;
   COLS.forEach(c => { state[c] = lsAll(c); terkirim[c] = true; });
   seedStatusLocal();
   setSync(false, reason);
+  sembunyikanGerbang(); // mode offline/demo: aplikasi terbuka langsung (tanpa database tidak ada izin yang bisa dicatat)
   renderAll();
 }
 function setSync(isOnline, reason) {
@@ -1726,6 +1911,7 @@ async function submitQuick(e) {
 
 /* ================= TAB & EVENT ================= */
 function setTab(name) {
+  tabAktif = name;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('show', p.id === 'panel-' + name));
 }
