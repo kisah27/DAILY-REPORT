@@ -1268,6 +1268,21 @@ async function hapusLaporan(id) {
 
 /* ================= WHATSAPP ================= */
 function waOpen(text) { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); }
+/* ---- pemformat teks WA: ringkas, hemat ruang, kolom sejajar di Android ---- */
+const STATUS_WA_PENDEK = { 'KIRIM':'KIRIM', 'STANDBY':'STDBY', 'STANDBY/TUNGGU DO':'STDBY', 'INAP':'INAP', 'PENDING':'PENDING', 'KIRIMAN PENDING':'PENDING', 'MUAT/KIRIM':'MUAT', 'LOADING/PROSES MUAT':'MUAT', 'STORING PERBAIKAN':'STORING', 'UNIT DI BACKUP':'BACKUP' };
+function statusWaPendek(s) { // status WA dipendekkan supaya baris rekap tidak makan tempat di ruang pesan
+  const S = String(s || '').toUpperCase().trim();
+  const tanpaKurung = S.replace(/\s*\(.*$/, '').trim(); // buang keterangan dalam kurung (mis. KIRIMAN PENDING (INFO PLANER) -> KIRIMAN PENDING)
+  const pendek = STATUS_WA_PENDEK[S] || STATUS_WA_PENDEK[tanpaKurung];
+  if (pendek) return pendek;
+  return tanpaKurung.length > 10 ? tanpaKurung.slice(0, 9) + '\u2026' : (tanpaKurung || '-');
+}
+const polisiWa = p => String(p || '').replace(/\s+/g, ''); // B 9120 UYT -> B9120UYT (hemat ruang, kolom tetap lurus)
+const potongWa = (v, n) => { const t = String(v || '').trim(); return t.length > n ? t.slice(0, n - 1) + '\u2026' : t; }; // tujuan dipotong agar satu baris di Android
+function barisWaRekap(no, pol, st, tu, wPol, wSt) { // satu baris rekap berkolom rapi (dikirim dalam blok monospace agar sejajar di Android)
+  const noS = String(no);
+  return (noS.length < 2 ? ' ' : '') + noS + ' ' + pol.padEnd(wPol) + ' ' + st.padEnd(wSt) + ' ' + tu + '\n';
+}
 function waRow(id) {
   const r = state.laporan.find(x => x.id === id); if (!r) return;
   const kon = String(r.kontrak || '').replace(/^KONTRAK\s+/i, '');
@@ -1275,14 +1290,18 @@ function waRow(id) {
     '' + fmtDate(r.tanggal) + '\n' +
     '' + r.polisi + ' - ' + r.status + ' - ' + r.tujuan + (kon ? ' - ' + kon : ''));
 }
-function waRekap() {
+function waRekap() { // kirim rekap lewat WhatsApp: ringkas & sejajar di Android (satu baris per unit dalam blok monospace per kontrak)
   const rows = visibleLaporan();
   if (!rows.length) { alert('Tidak ada data untuk dikirim.'); return; }
   let t = 'REKAP LAPORAN - SINAR MAJU JAYA\n';
   const emitGrup = arr => {
     grupLaporan(arr).forEach(g => {
-      t += '\n# KONTRAK ' + (g.kontrak || '(BELUM DIISI)') + '\n';
-      g.items.forEach((r, i) => { t += (i + 1) + '. ' + r.polisi + ' - ' + r.status + ' - ' + r.tujuan + '\n'; });
+      const items = g.items.map(r => ({ pol: polisiWa(r.polisi), st: statusWaPendek(r.status), tu: potongWa(r.tujuan, 16) }));
+      const wPol = Math.max(8, ...items.map(x => x.pol.length));
+      const wSt = Math.max(6, ...items.map(x => x.st.length));
+      t += '\n# KONTRAK ' + (g.kontrak || '(BELUM DIISI)') + '\n```\n';
+      items.forEach((x, i) => { t += barisWaRekap(i + 1, x.pol, x.st, x.tu || '-', wPol, wSt); });
+      t += '```\n';
     });
   };
   if (showAll) {
@@ -1595,35 +1614,40 @@ function buatLaporanDariAntrian(id) {
   $('panel-input').scrollIntoView({ behavior: 'smooth' });
   showToast('' + r.polisi + ' siap dilaporkan - lengkapi tujuan lalu simpan');
 }
-function waRekapKontrak(kontrak) { // kirim rekap satu kontrak lewat WhatsApp: no polisi - status - tujuan tiap unit, urut sama seperti papan rekap
+function waRekapKontrak(kontrak) { // kirim rekap satu kontrak lewat WhatsApp: ringkas & sejajar di Android (blok monospace, status pendek)
   const key = kontrakKey(kontrak);
   const arr = urutSepertiDaftarPolisi().filter(p => kontrakKey(p.kontrak) === key);
   if (!arr.length) { alert('Kontrak itu belum punya unit.'); return; }
   const bobot = st => STATUS_URUT_REKAP.indexOf(st);
   const items = arr.slice().sort((a, b) => bobot(statusRekap(a)) - bobot(statusRekap(b)) || (a.polisi || '').localeCompare(b.polisi || '', 'id'));
-  let t = 'REKAP LAPORAN - KONTRAK ' + (key || '(BELUM DIISI)') + ' - SINAR MAJU JAYA\n' + fmtDate(todayStr()) + '\n';
-  items.forEach((p, i) => { const d = detailStatusRekap(p); t += (i + 1) + '. ' + p.polisi + ' - ' + d.st + (p.tujuan ? ' - ' + p.tujuan : '') + '\n'; });
-  t += '\nTotal: ' + items.length + ' unit';
+  const rows = items.map(p => { const d = detailStatusRekap(p); return { pol: polisiWa(p.polisi), st: statusWaPendek(d.st), tu: potongWa(p.tujuan, 16) }; });
+  const wPol = Math.max(8, ...rows.map(r => r.pol.length));
+  const wSt = Math.max(6, ...rows.map(r => r.st.length));
+  let t = 'REKAP LAPORAN - KONTRAK ' + (key || '(BELUM DIISI)') + ' - SINAR MAJU JAYA\n' + fmtDate(todayStr()) + '\n```\n';
+  rows.forEach((r, i) => { t += barisWaRekap(i + 1, r.pol, r.st, r.tu || '-', wPol, wSt); });
+  t += '```\nTotal: ' + items.length + ' unit';
   waOpen(t);
 }
-function waAntrianKontrak(kontrak) { // kirim antrian satu kontrak lewat WhatsApp
+function waAntrianKontrak(kontrak) { // kirim antrian satu kontrak lewat WhatsApp: hanya unit ANTRIAN DO & STANDBY, tanpa tulisan status
   const key = kontrakKey(kontrak);
   const anggota = state.antrian.filter(r => {
     const m = state.polisi.find(p => normPol(p.polisi) === normPol(r.polisi));
-    return (m ? kontrakKey(m.kontrak) : '') === key;
+    const tungguDo = r.status === 'ANTRIAN DO' || r.status === 'STANDBY'; // isi WA hanya barisan tunggu DO
+    return tungguDo && (m ? kontrakKey(m.kontrak) : '') === key;
   });
   const arr = urutanAntrian(anggota);
-  if (!arr.length) { alert('Antrian kontrak itu masih kosong.'); return; }
+  if (!arr.length) { alert('Tidak ada unit berstatus ANTRIAN DO / STANDBY di kontrak itu.'); return; }
   let t = 'ANTRIAN DO - KONTRAK ' + (key || '(BELUM DIISI)') + ' - SINAR MAJU JAYA\n';
   arr.forEach((r, i) => { t += (i + 1) + '. ' + r.polisi + '\n'; });
   t += '\nTotal: ' + arr.length + ' unit';
   waOpen(t);
 }
-function waAntrian() {
-  if (!state.antrian.length) { alert('Antrian masih kosong.'); return; }
+function waAntrian() { // kirim antrian lewat WhatsApp: hanya unit ANTRIAN DO & STANDBY, tanpa tulisan status
+  const tungguDo = state.antrian.filter(r => r.status === 'ANTRIAN DO' || r.status === 'STANDBY'); // isi WA hanya barisan tunggu DO
+  if (!tungguDo.length) { alert('Tidak ada unit berstatus ANTRIAN DO / STANDBY.'); return; }
   let t = 'ANTRIAN DO - SINAR MAJU JAYA\n';
   let total = 0;
-  grupAntrian(urutanAntrian(state.antrian)).forEach(g => {
+  grupAntrian(urutanAntrian(tungguDo)).forEach(g => {
     t += '\n# KONTRAK ' + (g.kontrak || '(BELUM DIISI)') + '\n';
     g.items.forEach((r, i) => { t += (i + 1) + '. ' + r.polisi + '\n'; });
     total += g.items.length;
