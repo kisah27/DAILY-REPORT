@@ -1278,9 +1278,8 @@ function statusWaPendek(s) { // status WA dipendekkan supaya baris rekap tidak m
   return tanpaKurung.length > 10 ? tanpaKurung.slice(0, 9) + '\u2026' : (tanpaKurung || '-');
 }
 const polisiWa = p => String(p || '').replace(/\s+/g, ''); // B 9120 UYT -> B9120UYT (hemat ruang, kolom tetap lurus)
-function barisWaRekap(no, pol, st, wPol) { // satu baris rekap berkolom rapi (dikirim dalam blok monospace agar sejajar di Android)
-  const noS = String(no);
-  return (noS.length < 2 ? ' ' : '') + noS + ' ' + pol.padEnd(wPol) + ' ' + st + '\n';
+function barisWaRekap(no, pol, st) { // satu baris rekap: nomor + no polisi rapat + status pendek (tanpa blok monospace supaya ukuran huruf WA normal/kecil)
+  return no + '. ' + pol + ' ' + st + '\n';
 }
 function waRow(id) {
   const r = state.laporan.find(x => x.id === id); if (!r) return;
@@ -1289,17 +1288,15 @@ function waRow(id) {
     '' + fmtDate(r.tanggal) + '\n' +
     '' + r.polisi + ' - ' + r.status + ' - ' + r.tujuan + (kon ? ' - ' + kon : ''));
 }
-function waRekap() { // kirim rekap lewat WhatsApp: ringkas & sejajar di Android (satu baris per unit dalam blok monospace per kontrak)
+function waRekap() { // kirim rekap lewat WhatsApp: sangat ringkas, satu baris per unit, huruf WA biasa (tanpa blok monospace)
   const rows = visibleLaporan();
   if (!rows.length) { alert('Tidak ada data untuk dikirim.'); return; }
   let t = 'REKAP LAPORAN - SINAR MAJU JAYA\n';
   const emitGrup = arr => {
     grupLaporan(arr).forEach(g => {
       const items = g.items.map(r => ({ pol: polisiWa(r.polisi), st: statusWaPendek(r.status) }));
-      const wPol = Math.max(8, ...items.map(x => x.pol.length));
-      t += '# KONTRAK ' + (g.kontrak || '(BELUM DIISI)') + '\n```\n';
-      items.forEach((x, i) => { t += barisWaRekap(i + 1, x.pol, x.st, wPol); });
-      t += '```\n';
+      t += '# KONTRAK ' + (g.kontrak || '(BELUM DIISI)') + '\n';
+      items.forEach((x, i) => { t += barisWaRekap(i + 1, x.pol, x.st); });
     });
   };
   if (showAll) {
@@ -1612,17 +1609,16 @@ function buatLaporanDariAntrian(id) {
   $('panel-input').scrollIntoView({ behavior: 'smooth' });
   showToast('' + r.polisi + ' siap dilaporkan - lengkapi tujuan lalu simpan');
 }
-function waRekapKontrak(kontrak) { // kirim rekap satu kontrak lewat WhatsApp: ringkas & sejajar di Android (blok monospace, status pendek)
+function waRekapKontrak(kontrak) { // kirim rekap satu kontrak lewat WhatsApp: sangat ringkas, huruf WA biasa (tanpa blok monospace), status pendek
   const key = kontrakKey(kontrak);
   const arr = urutSepertiDaftarPolisi().filter(p => kontrakKey(p.kontrak) === key);
   if (!arr.length) { alert('Kontrak itu belum punya unit.'); return; }
   const bobot = st => STATUS_URUT_REKAP.indexOf(st);
   const items = arr.slice().sort((a, b) => bobot(statusRekap(a)) - bobot(statusRekap(b)) || (a.polisi || '').localeCompare(b.polisi || '', 'id'));
   const rows = items.map(p => ({ pol: polisiWa(p.polisi), st: statusWaPendek(detailStatusRekap(p).st) }));
-  const wPol = Math.max(8, ...rows.map(r => r.pol.length));
-  let t = 'REKAP KONTRAK ' + (key || '(BELUM DIISI)') + '\nSINAR MAJU JAYA - ' + fmtDate(todayStr()) + '\n```\n';
-  rows.forEach((r, i) => { t += barisWaRekap(i + 1, r.pol, r.st, wPol); });
-  t += '```\nTotal: ' + items.length + ' unit';
+  let t = 'REKAP KONTRAK ' + (key || '(BELUM DIISI)') + '\nSINAR MAJU JAYA - ' + fmtDate(todayStr()) + '\n';
+  rows.forEach((r, i) => { t += barisWaRekap(i + 1, r.pol, r.st); });
+  t += 'Total: ' + items.length + ' unit';
   waOpen(t);
 }
 function waAntrianKontrak(kontrak) { // kirim antrian satu kontrak lewat WhatsApp: hanya unit ANTRIAN DO & STANDBY, tanpa tulisan status
